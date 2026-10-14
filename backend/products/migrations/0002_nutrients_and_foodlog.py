@@ -1,0 +1,46 @@
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('products', '0001_initial'),
+    ]
+
+    operations = [
+        migrations.AddField(
+            model_name='product',
+            name='calcium_mg',
+            field=models.FloatField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='product',
+            name='carbs',
+            field=models.FloatField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='product',
+            name='cholesterol',
+            field=models.FloatField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='product',
+            name='iron_mg',
+            field=models.FloatField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='product',
+            name='potassium_mg',
+            field=models.FloatField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='product',
+            name='sodium_mg',
+            field=models.FloatField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='product',
+            name='trans_fat',
+            field=models.FloatField(blank=True, null=True),
+        ),
+    ]
