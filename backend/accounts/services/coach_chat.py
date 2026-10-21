@@ -1,7 +1,6 @@
-"""Nutrition coach chat. Gemini first, OpenAI if Gemini fails."""
+"""Nutrition coach chat powered by Gemini."""
 
 import logging
-import os
 from datetime import timedelta
 
 from django.utils import timezone
@@ -9,16 +8,13 @@ from django.utils import timezone
 from accounts.models import FoodLog, UserProfile
 from accounts.services.nutrition_summary import get_nutrition_summary
 from accounts.services.stats_dashboard import get_health_risk, get_insights, get_trend_data
+from products.services.gemini_client import (
+    chat_text,
+    public_provider_error,
+    require_gemini_api_key,
+)
 
 logger = logging.getLogger(__name__)
-
-GEMINI_MODELS = (
-    'gemini-3.5-flash-lite',
-    'gemini-3.5-flash',
-    'gemini-3.1-flash-lite',
-    'gemini-flash-latest',
-)
-OPENAI_MODEL = 'gpt-4o-mini'
 MAX_MESSAGES = 12
 MAX_MESSAGE_CHARS = 1500
 
@@ -135,38 +131,12 @@ def reply_to_coach(user, messages: list[dict]) -> tuple[str, str]:
 
 
 def generate_coach_reply(system_prompt: str, messages: list[dict]) -> tuple[str, str]:
-    gemini_key = (os.getenv('GEMINI_API_KEY') or '').strip()
-    openai_key = (os.getenv('OPENAI_API_KEY') or '').strip()
-    if not gemini_key and not openai_key:
-        raise RuntimeError('No API key configured. Set GEMINI_API_KEY or OPENAI_API_KEY in .env')
-
-    errors = []
-    if gemini_key:
-        try:
-            return _gemini_chat(system_prompt, messages, gemini_key), 'gemini'
-        except Exception as exc:
-            logger.warning('Coach Gemini failed: %s', exc)
-            errors.append(_public_provider_error('Gemini', exc))
-
-    if openai_key:
-        try:
-            return _openai_chat(system_prompt, messages, openai_key), 'openai'
-        except Exception as exc:
-            logger.warning('Coach OpenAI failed: %s', exc)
-            errors.append(_public_provider_error('OpenAI', exc))
-
-    raise RuntimeError(' | '.join(errors) or 'AI processing failed.')
-
-
-def _public_provider_error(name: str, exc: Exception) -> str:
-    text = str(exc).lower()
-    if '429' in text or 'credit' in text or 'quota' in text or 'billing' in text:
-        return f'{name} is out of credits.'
-    if '401' in text or 'api key' in text or 'incorrect api key' in text:
-        return f'{name} rejected the API key.'
-    if '404' in text or 'no longer available' in text:
-        return f'{name} model is unavailable.'
-    return f'{name} could not reply.'
+    require_gemini_api_key()
+    try:
+        return chat_text(system_prompt, messages, temperature=0.4, timeout=25), 'gemini'
+    except Exception as exc:
+        logger.warning('Coach Gemini failed: %s', exc)
+        raise RuntimeError(public_provider_error('Gemini', exc)) from exc
 
 
 def _clean_messages(messages: list[dict]) -> list[dict]:
@@ -225,56 +195,3 @@ def _recent_meals(user) -> str:
         when = timezone.localtime(log.logged_at).strftime('%Y-%m-%d %H:%M')
         lines.append(f'- {when} {log.food_name}: {detail}')
     return '\n'.join(lines)
-
-
-def _gemini_chat(system_prompt: str, messages: list[dict], api_key: str) -> str:
-    try:
-        import google.generativeai as genai
-    except ImportError as exc:
-        raise RuntimeError('Gemini package not installed.') from exc
-
-    genai.configure(api_key=api_key)
-    history = [
-        {
-            'role': 'user' if item['role'] == 'user' else 'model',
-            'parts': [item['content']],
-        }
-        for item in messages[:-1]
-    ]
-    errors = []
-    for model_name in GEMINI_MODELS:
-        try:
-            model = genai.GenerativeModel(model_name, system_instruction=system_prompt)
-            chat = model.start_chat(history=history)
-            response = chat.send_message(
-                messages[-1]['content'],
-                generation_config={'temperature': 0.4},
-                request_options={'timeout': 25},
-            )
-            text = (getattr(response, 'text', '') or '').strip()
-            if text:
-                return text
-            errors.append(f'{model_name}: empty response')
-        except Exception as exc:
-            errors.append(f'{model_name}: {exc}')
-    raise RuntimeError(' ; '.join(errors) or 'Gemini returned an empty response.')
-
-
-def _openai_chat(system_prompt: str, messages: list[dict], api_key: str) -> str:
-    try:
-        from openai import OpenAI
-    except ImportError as exc:
-        raise RuntimeError('OpenAI package not installed.') from exc
-
-    client = OpenAI(api_key=api_key)
-    payload = [{'role': 'system', 'content': system_prompt}]
-    payload.extend({'role': item['role'], 'content': item['content']} for item in messages)
-    resp = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=payload,
-        temperature=0.4,
-    )
-    text = (resp.choices[0].message.content or '').strip()
-    if not text:
-        raise RuntimeError('OpenAI returned an empty response.')
-    return text

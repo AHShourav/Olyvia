@@ -352,7 +352,7 @@ def fix_food_results(request):
     """
     POST /api/auth/fix-food-results
     Requires auth. Accepts: title, nutrients, user_fix, optional food_log_id.
-    Uses Gemini/OpenAI to fix; when food_log_id provided, updates FoodLog.
+    Uses Gemini to fix; when food_log_id provided, updates FoodLog.
     """
     import logging
     logger = logging.getLogger(__name__)

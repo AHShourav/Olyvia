@@ -221,7 +221,7 @@ def _add_verdict_to_product_response(data: dict, product, request):
     data['verdict_reason'] = result['reason']
 
 
-# Max audio file size: 25 MB (Whisper limit)
+# Max audio file size: 25 MB
 MAX_AUDIO_SIZE = 25 * 1024 * 1024
 
 # Max image size: 20 MB (Vision API limit)

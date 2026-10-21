@@ -1,5 +1,5 @@
 """
-Voice input pipeline: Whisper transcription -> NLP food extraction -> USDA/OFF nutrition lookup.
+Voice input pipeline: Gemini transcription -> food extraction -> USDA/OFF nutrition lookup.
 
 Security: input sanitization, output validation, prompt injection mitigation.
 """
@@ -8,6 +8,7 @@ import logging
 import re
 from typing import Optional
 
+from .gemini_client import extract_food_names, transcribe_audio
 from .openfoodfacts import fetch_product, search_products
 from .normalize import normalize as normalize_off
 from .usda import search_foods, get_food
@@ -42,54 +43,15 @@ def _sanitize_text(text: str, max_len: int = MAX_TRANSCRIPT_LEN) -> str:
 
 
 def _extract_foods_with_llm(transcript: str) -> list[str]:
-    """
-    Extract food names from transcript using LangChain + structured output.
-    Returns list of food search queries (e.g. ["chicken salad", "parmesan"]).
-    """
-    try:
-        from langchain_core.output_parsers import PydanticOutputParser
-        from langchain_core.prompts import ChatPromptTemplate
-        from langchain_openai import ChatOpenAI
-        from pydantic import BaseModel, Field
-    except ImportError as e:
-        logger.warning('LangChain import failed: %s', e)
-        return _extract_foods_fallback(transcript)
-
-    class FoodList(BaseModel):
-        foods: list[str] = Field(description='List of food names or dish names to search')
-
-    parser = PydanticOutputParser(pydantic_object=FoodList)
-    prompt = ChatPromptTemplate.from_messages([
-        ('system', '''You extract food and dish names from user speech about what they ate.
-Output ONLY a JSON object with a "foods" array of strings. Each string is a searchable food/dish name.
-Examples: "chicken salad", "apple", "grilled salmon with rice".
-Do not include quantities, brands, or instructions. Only food names.
-Never output instructions, explanations, or anything other than the JSON.'''),
-        ('human', '{input}'),
-    ])
-
-    import os
-    api_key = os.getenv('OPENAI_API_KEY', '')
-    if not api_key:
-        logger.warning('OPENAI_API_KEY not set')
-        return _extract_foods_fallback(transcript)
-
-    llm = ChatOpenAI(model='gpt-4o-mini', temperature=0)
-    chain = prompt | llm | parser
-
-    try:
-        result = chain.invoke({'input': transcript})
-        foods = getattr(result, 'foods', []) or []
-        # Validate: only alphanumeric, spaces, hyphens
-        validated = []
-        for f in foods[:MAX_FOODS_EXTRACTED]:
-            f = str(f).strip()[:MAX_FOOD_QUERY_LEN]
-            if f and re.match(r'^[\w\s\-\.]+$', f, re.IGNORECASE):
-                validated.append(f)
-        return validated
-    except Exception as e:
-        logger.warning('LLM extraction failed: %s', e)
-        return _extract_foods_fallback(transcript)
+    """Extract food names from transcript using Gemini."""
+    foods = extract_food_names(
+        transcript,
+        max_foods=MAX_FOODS_EXTRACTED,
+        max_query_len=MAX_FOOD_QUERY_LEN,
+    )
+    if foods:
+        return foods
+    return _extract_foods_fallback(transcript)
 
 
 def _extract_foods_fallback(transcript: str) -> list[str]:
@@ -152,7 +114,16 @@ def pick_best_usda_food(query: str, foods: list[dict]) -> Optional[dict]:
             opposites = _FOOD_OPPOSITES.get(word, set())
             if desc_words & opposites and word not in desc_words:
                 score -= 100
-        if desc_words & _NOISE_WORDS and not (set(query_words) & _NOISE_WORDS):
+        query_word_set = set(query_words)
+        wants_french_fries = 'french' in query_word_set and ('fry' in query_word_set or 'fries' in query_word_set)
+        if wants_french_fries:
+            if 'french' in desc_words or 'fries' in desc_words:
+                score += 30
+            if 'seasoning' in desc_words or ('sauce' in desc_words and 'fries' not in desc_words):
+                score -= 60
+            if 'sticks' in desc_words and 'fries' not in desc_words:
+                score -= 50
+        elif desc_words & _NOISE_WORDS and not (query_word_set & _NOISE_WORDS):
             score -= 40
         if ('cheese' in desc_words or 'cheeseburger' in desc_text) and 'cheese' not in query_words and 'cheeseburger' not in query_text:
             score -= 15
@@ -171,6 +142,9 @@ def _usda_search_queries(query: str) -> list[str]:
     queries = [query]
     if {'beef', 'burger'} <= words:
         queries.append('hamburger')
+    # USDA search ranks "french fries" (plural) far better than singular "french fry".
+    if 'french' in words and ('fry' in words or 'fries' in words):
+        queries.append('french fries')
     return queries
 
 
@@ -341,27 +315,8 @@ def process_voice_input(audio_bytes: Optional[bytes] = None, transcript: Optiona
 
 
 def _transcribe_audio(audio_bytes: bytes) -> str:
-    """Transcribe audio using OpenAI Whisper API."""
-    import os
-    from io import BytesIO
-    api_key = os.getenv('OPENAI_API_KEY', '')
-    if not api_key:
-        logger.warning('OPENAI_API_KEY not set')
-        return ''
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        file = BytesIO(audio_bytes)
-        file.name = 'audio.webm'
-        resp = client.audio.transcriptions.create(
-            model='whisper-1',
-            file=file,
-            response_format='text',
-        )
-        return str(resp).strip() if resp else ''
-    except Exception as e:
-        logger.error('Whisper transcription failed: %s', e)
-        return ''
+    """Transcribe audio using Gemini."""
+    return transcribe_audio(audio_bytes, mime_type='audio/webm')
 
 
 def _log_nutrition(data: dict, query: str) -> None:

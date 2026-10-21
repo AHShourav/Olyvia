@@ -109,7 +109,7 @@ def update_food_log(user: CustomUser, log_id: int, food_name: str, nutrients: di
         return None
 
 
-def clear_food_logs(user: CustomUser, for_date: date | None = None) -> int:
+def clear_food_logs(user: CustomUser, for_date: Optional[date] = None) -> int:
     """Delete food logs for the user. Optional date limits to that calendar day."""
     qs = FoodLog.objects.filter(user=user)
     if for_date is not None:
