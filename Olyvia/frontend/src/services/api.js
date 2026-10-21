@@ -1,10 +1,35 @@
 const API_BASE = import.meta.env.VITE_API_URL || ''
+/** True when the UI talks to a deployed API (e.g. Render), not the Vite dev proxy. */
+export const isRemoteApi = Boolean(API_BASE)
 const FETCH_TIMEOUT_MS = 45000
-const AUTH_TIMEOUT_MS = 15000
+/** Render free tier cold starts often exceed 15s; allow time for wake + login. */
+const AUTH_TIMEOUT_MS = 90000
+const COLD_START_RETRIES = 2
 
 let authErrorHandler = null
 export function setAuthErrorHandler(fn) {
   authErrorHandler = fn
+}
+
+function isRetryableNetworkError(err) {
+  if (!err) return false
+  if (err.name === 'AbortError') return true
+  const msg = String(err.message || '').toLowerCase()
+  if (msg.includes('abort')) return true
+  if (err.name === 'TypeError' && msg.includes('fetch')) return true
+  return false
+}
+
+function toFetchError(err) {
+  if (err?.name === 'AbortError' || String(err?.message || '').toLowerCase().includes('abort')) {
+    return new Error(
+      'The server took too long to respond. On Render it may be waking up — wait a moment and try again.',
+    )
+  }
+  if (err?.name === 'TypeError' && String(err?.message || '').includes('fetch')) {
+    return new Error('Could not reach the server. It may still be starting — try again in a few seconds.')
+  }
+  return err
 }
 
 async function fetchWithTimeout(url, options, timeout = FETCH_TIMEOUT_MS) {
@@ -13,16 +38,41 @@ async function fetchWithTimeout(url, options, timeout = FETCH_TIMEOUT_MS) {
   try {
     const res = await fetch(url, { ...options, signal: ctrl.signal })
     return res
+  } catch (err) {
+    throw toFetchError(err)
   } finally {
     clearTimeout(id)
   }
+}
+
+async function fetchWithColdStartRetry(url, options, timeout = AUTH_TIMEOUT_MS) {
+  let lastErr
+  for (let attempt = 0; attempt <= COLD_START_RETRIES; attempt++) {
+    try {
+      return await fetchWithTimeout(url, options, timeout)
+    } catch (err) {
+      lastErr = err
+      if (attempt < COLD_START_RETRIES && isRetryableNetworkError(err)) {
+        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)))
+        continue
+      }
+      throw err
+    }
+  }
+  throw lastErr
+}
+
+/** Ping backend (e.g. before login) so Render can spin up while the user waits. */
+export async function ensureBackendReady() {
+  if (!API_BASE) return
+  await fetchWithColdStartRetry(`${API_BASE}/api/health/`, { method: 'GET' }, AUTH_TIMEOUT_MS)
 }
 
 async function tryRefreshToken() {
   const refresh = localStorage.getItem('olyvia_refresh')
   if (!refresh) return false
   try {
-    const res = await fetch(`${API_BASE}/api/auth/token/refresh/`, {
+    const res = await fetchWithColdStartRetry(`${API_BASE}/api/auth/token/refresh/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh }),
@@ -44,8 +94,9 @@ function clearTokens() {
 }
 
 async function fetchWithAuth(url, options, timeout) {
+  const ms = timeout ?? AUTH_TIMEOUT_MS
   const headers = { ...getAuthHeaders(), ...options.headers }
-  let res = await fetchWithTimeout(url, { ...options, headers }, timeout)
+  let res = await fetchWithColdStartRetry(url, { ...options, headers }, ms)
   if (res.status !== 401) return res
   const refreshed = await tryRefreshToken()
   if (!refreshed) {
@@ -57,7 +108,7 @@ async function fetchWithAuth(url, options, timeout) {
   const canRetry = !options.body || typeof options.body === 'string'
   if (canRetry) {
     const retryHeaders = { ...getAuthHeaders(), ...options.headers }
-    res = await fetchWithTimeout(url, { ...options, headers: retryHeaders }, timeout)
+    res = await fetchWithColdStartRetry(url, { ...options, headers: retryHeaders }, ms)
   } else {
     throw new Error('Session expired. Please try again.')
   }
@@ -120,11 +171,11 @@ function getAuthHeaders() {
 }
 
 export async function register({ email, password, password_confirm, full_name = '' }) {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/register/`, {
+  const res = await fetchWithColdStartRetry(`${API_BASE}/api/auth/register/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: email.trim().toLowerCase(), password, password_confirm, full_name: full_name.trim() }),
-  }, 15000)
+  })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     const msg = err.email?.[0] || err.password?.[0] || err.password_confirm?.[0] || err.detail || res.statusText
@@ -134,10 +185,10 @@ export async function register({ email, password, password_confirm, full_name = 
 }
 
 export async function loginDemo() {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/demo/`, {
+  const res = await fetchWithColdStartRetry(`${API_BASE}/api/auth/demo/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-  }, 15000)
+  })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.detail || res.statusText)
@@ -146,11 +197,11 @@ export async function loginDemo() {
 }
 
 export async function login({ email, password }) {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/login/`, {
+  const res = await fetchWithColdStartRetry(`${API_BASE}/api/auth/login/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
-  }, 15000)
+  })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.detail || res.statusText)
@@ -291,7 +342,7 @@ export async function fetchMe() {
   const res = await fetchWithAuth(`${API_BASE}/api/auth/me/`, {
     method: 'GET',
     headers: { 'Content-Type': 'application/json' },
-  }, 15000)
+  }, AUTH_TIMEOUT_MS)
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.detail || res.statusText)
@@ -304,7 +355,7 @@ export async function updateProfile(data) {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
-  }, 15000)
+  }, AUTH_TIMEOUT_MS)
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.detail || res.statusText)

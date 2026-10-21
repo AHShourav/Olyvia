@@ -2,8 +2,10 @@ import { useState } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { Login } from './components/auth/Login'
 import { Signup } from './components/auth/Signup'
+import { BackendRestartingNotice } from './components/auth/BackendRestartingNotice'
 import { Onboarding } from './components/onboarding/Onboarding'
 import { DietChoice } from './components/auth/DietChoice'
+import { isRemoteApi } from './services/api'
 import MainApp from './MainApp'
 
 function AppContent() {
@@ -14,7 +16,11 @@ function AppContent() {
     return (
       <div className="auth-page">
         <div className="auth-box">
-          <p className="auth-subtitle">Loading…</p>
+          {isRemoteApi ? (
+            <BackendRestartingNotice />
+          ) : (
+            <p className="auth-subtitle">Loading…</p>
+          )}
         </div>
       </div>
     )

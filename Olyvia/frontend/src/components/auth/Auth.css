@@ -120,3 +120,56 @@
 .auth-link:hover {
   text-decoration: underline;
 }
+
+.backend-restart-notice {
+  text-align: center;
+  padding: 8px 0 4px;
+}
+
+.backend-restart-notice--compact {
+  margin-bottom: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(102, 158, 255, 0.08);
+  border: 1px solid rgba(102, 158, 255, 0.2);
+}
+
+.backend-restart-spinner {
+  width: 28px;
+  height: 28px;
+  margin: 0 auto 12px;
+  border: 3px solid rgba(102, 158, 255, 0.25);
+  border-top-color: #669eff;
+  border-radius: 50%;
+  animation: backend-restart-spin 0.85s linear infinite;
+}
+
+.backend-restart-notice--compact .backend-restart-spinner {
+  width: 22px;
+  height: 22px;
+  margin-bottom: 8px;
+}
+
+.backend-restart-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.backend-restart-notice--compact .backend-restart-title {
+  font-size: 14px;
+}
+
+.backend-restart-detail {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #666;
+}
+
+@keyframes backend-restart-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

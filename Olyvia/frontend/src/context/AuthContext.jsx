@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
-import { register as apiRegister, login as apiLogin, loginDemo as apiLoginDemo, logout as apiLogout, fetchMe, storeTokens, setAuthErrorHandler, fetchProfileAvatarUrl } from '../services/api'
+import { register as apiRegister, login as apiLogin, loginDemo as apiLoginDemo, logout as apiLogout, fetchMe, storeTokens, setAuthErrorHandler, fetchProfileAvatarUrl, ensureBackendReady } from '../services/api'
 
 const AuthContext = createContext(null)
 
@@ -51,7 +51,11 @@ export function AuthProvider({ children }) {
       setLoading(false)
       return
     }
+    setLoading(true)
     try {
+      if (import.meta.env.VITE_API_URL) {
+        await ensureBackendReady().catch(() => {})
+      }
       const { user: u, profile: p } = await fetchMe()
       setUser(u)
       setProfile(p)

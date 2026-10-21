@@ -17,9 +17,11 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 
+from config.views import health
 from products.views import scan_barcode, search_foods_by_name, food_by_fdc_id, voice_analyze, analyze_image
 
 urlpatterns = [
+    path('api/health/', health),
     path('admin/', admin.site.urls),
     path('api/auth/', include('accounts.urls')),
     path('api/scan-barcode', scan_barcode),
